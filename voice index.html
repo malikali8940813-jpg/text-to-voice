@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Clone Pro - Apni Aawaz AI se Bulwao</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap');
+        body { font-family: 'Outfit', sans-serif; background-color: #f8fafc; }
+        .glass-morphism { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.3); }
+        .custom-scrollbar::-webkit-scrollbar { width: 5px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f1f1; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        .record-pulse { animation: pulse-red 2s infinite; }
+        @keyframes pulse-red { 0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); } 70% { box-shadow: 0 0 0 15px rgba(239, 68, 68, 0); } 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); } }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent";
+        const ANALYZE_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent";
+
+        const DEFAULT_VOICES = [
+            { id: 'Kore', name: 'Kore', description: 'Energetic aur bright' },
+            { id: 'Puck', name: 'Puck', description: 'Playful aur shaitaan' },
+            { id: 'Zephyr', name: 'Zephyr', description: 'Fresh aur youthful' },
+            { id: 'Charon', name: 'Charon', description: 'Shaant aur heavy authority' },
+            { id: 'Orus', name: 'Orus', description: 'Mature aur deep male voice' },
+            { id: 'Aoede', name: 'Aoede', description: 'Clear aur inquisitive' },
+            { id: 'Zubenelgenubi', name: 'Zubenelgenubi', description: 'Ekdum deep aur serious' },
+        ];
+
+        function App() {
+            // Memory se key nikaalna
+            const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
+            const [text, setText] = useState('Bhai dekh, meri aawaz ab AI nikal raha hai!');
+            const [styleInstruction, setStyleInstruction] = useState('');
+            const [selectedVoice, setSelectedVoice] = useState('Orus');
+            const [isGenerating, setIsGenerating] = useState(false);
+            const [audioUrl, setAudioUrl] = useState(null);
+            const [error, setError] = useState(null);
+            const [isRecording, setIsRecording] = useState(false);
+            const [isAnalyzing, setIsAnalyzing] = useState(false);
+            const [uploadedFileName, setUploadedFileName] = useState("");
+            const [saveStatus, setSaveStatus] = useState(false);
+
+            const mediaRecorderRef = useRef(null);
+            const chunksRef = useRef([]);
+            const fileInputRef = useRef(null);
+
+            // Jab bhi apiKey change ho, memory mein save kar lo
+            useEffect(() => {
+                localStorage.setItem('gemini_api_key', apiKey);
+                if (apiKey) {
+                    setSaveStatus(true);
+                    const timer = setTimeout(() => setSaveStatus(false), 2000);
+                    return () => clearTimeout(timer);
+                }
+            }, [apiKey]);
+
+            const startRecording = async () => {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    mediaRecorderRef.current = new MediaRecorder(stream);
+                    chunksRef.current = [];
+                    mediaRecorderRef.current.ondataavailable = (e) => {
+                        if (e.data.size > 0) chunksRef.current.push(e.data);
+                    };
+                    mediaRecorderRef.current.onstop = () => {
+                        const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+                        setUploadedFileName("Live Recording");
+                        analyzeVoice(blob);
+                    };
+                    mediaRecorderRef.current.start();
+                    setIsRecording(true);
+                    setError(null);
+                } catch (err) {
+                    setError("Mic access nahi mila. Settings check karein.");
+                }
+            };
+
+            const stopRecording = () => {
+                if (mediaRecorderRef.current && isRecording) {
+                    mediaRecorderRef.current.stop();
+                    setIsRecording(false);
+                    mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+                }
+            };
+
+            const handleFileUpload = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    if (file.size > 10 * 1024 * 1024) {
+                        setError("File bohot badi hai (Max 10MB)");
+                        return;
+                    }
+                    setUploadedFileName(file.name);
+                    analyzeVoice(file);
+                }
+            };
+
+            const analyzeVoice = async (blobOrFile) => {
+                if (!apiKey) {
+                    setError("Pehle apni Gemini API Key daalein.");
+                    return;
+                }
+                setIsAnalyzing(true);
+                setError(null);
+                try {
+                    const reader = new FileReader();
+                    reader.readAsDataURL(blobOrFile);
+                    reader.onloadend = async () => {
+                        const base64Data = reader.result.split(',')[1];
+                        const response = await fetch(`${ANALYZE_URL}?key=${apiKey}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                contents: [{
+                                    parts: [
+                                        { text: "Analyze this voice precisely. Describe tone, pitch, speed, and accent for a TTS engine in 8 words." },
+                                        { inlineData: { mimeType: blobOrFile.type || "audio/webm", data: base64Data } }
+                                    ]
+                                }]
+                            })
+                        });
+                        const result = await response.json();
+                        const analysis = result.candidates?.[0]?.content?.parts?.[0]?.text;
+                        if (analysis) setStyleInstruction(analysis.trim());
+                    };
+                } catch (err) {
+                    setError("Aawaz analyze karne mein problem hui.");
+                } finally {
+                    setIsAnalyzing(false);
+                }
+            };
+
+            const createWavFile = (pcmData, sampleRate = 24000) => {
+                const buffer = new ArrayBuffer(44 + pcmData.length);
+                const view = new DataView(buffer);
+                const writeString = (offset, string) => {
+                    for (let i = 0; i < string.length; i++) view.setUint8(offset + i, string.charCodeAt(i));
+                };
+                writeString(0, 'RIFF');
+                view.setUint32(4, 36 + pcmData.length, true);
+                writeString(8, 'WAVE');
+                writeString(12, 'fmt ');
+                view.setUint32(16, 16, true);
+                view.setUint16(20, 1, true);
+                view.setUint16(22, 1, true);
+                view.setUint32(24, sampleRate, true);
+                view.setUint32(28, sampleRate * 2, true);
+                view.setUint16(32, 2, true);
+                view.setUint16(34, 16, true);
+                writeString(36, 'data');
+                view.setUint32(40, pcmData.length, true);
+                for (let i = 0; i < pcmData.length; i++) view.setUint8(44 + i, pcmData[i]);
+                return new Blob([buffer], { type: 'audio/wav' });
+            };
+
+            const generateVoice = async () => {
+                setIsGenerating(true);
+                setError(null);
+                const prompt = `Style instruction: ${styleInstruction}. Dialogue: ${text}`;
+                try {
+                    const response = await fetch(`${API_URL}?key=${apiKey}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            contents: [{ parts: [{ text: prompt }] }],
+                            generationConfig: {
+                                responseModalities: ["AUDIO"],
+                                speechConfig: {
+                                    voiceConfig: {
+                                        prebuiltVoiceConfig: { voiceName: selectedVoice }
+                                    }
+                                }
+                            }
+                        })
+                    });
+                    if (!response.ok) throw new Error("API Error");
+                    const result = await response.json();
+                    const base64Audio = result.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData?.data;
+                    if (base64Audio) {
+                        const binaryString = atob(base64Audio);
+                        const pcmData = new Uint8Array(binaryString.length);
+                        for (let i = 0; i < binaryString.length; i++) pcmData[i] = binaryString.charCodeAt(i);
+                        const wavBlob = createWavFile(pcmData);
+                        setAudioUrl(URL.createObjectURL(wavBlob));
+                    }
+                } catch (err) {
+                    setError("Voice generate nahi ho saki. API key check karein.");
+                } finally {
+                    setIsGenerating(false);
+                }
+            };
+
+            return (
+                <div className="min-h-screen p-4 md:p-10 flex flex-col items-center">
+                    <div className="max-w-4xl w-full">
+                        {/* Header */}
+                        <div className="text-center mb-10">
+                            <div className="inline-block p-4 bg-indigo-600 rounded-3xl shadow-2xl shadow-indigo-200 mb-4">
+                                <i className="fas fa-robot text-white text-4xl"></i>
+                            </div>
+                            <h1 className="text-4xl font-bold text-slate-800">Voice Clone Pro</h1>
+                            <p className="text-slate-500 mt-2">Apni aawaz AI se bulwaein (Key Saved)</p>
+                        </div>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                            {/* Main Control Panel */}
+                            <div className="lg:col-span-2 space-y-6">
+                                <div className="glass-morphism rounded-3xl p-6 shadow-xl space-y-6">
+                                    {/* Key Input with Status */}
+                                    <div className="relative">
+                                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Gemini API Key (Saved Automatically)</label>
+                                        <div className="relative flex items-center">
+                                            <input 
+                                                type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)}
+                                                className="mt-1 w-full p-3 pr-10 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                                                placeholder="Apni API Key yahan daalein"
+                                            />
+                                            {saveStatus && (
+                                                <i className="fas fa-check-circle text-green-500 absolute right-3 top-1/2 -translate-y-1/3 animate-bounce"></i>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    <div className="flex flex-col md:flex-row gap-4">
+                                        <button 
+                                            onMouseDown={startRecording} onMouseUp={stopRecording}
+                                            onTouchStart={startRecording} onTouchEnd={stopRecording}
+                                            className={`flex-1 p-6 rounded-2xl flex flex-col items-center gap-2 transition-all ${isRecording ? 'bg-red-500 text-white record-pulse' : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100'}`}
+                                        >
+                                            <i className={`fas ${isRecording ? 'fa-stop-circle' : 'fa-microphone'} text-2xl`}></i>
+                                            <span className="font-bold text-sm uppercase">{isRecording ? 'Chhod dein' : 'Daba kar Record Karein'}</span>
+                                        </button>
+
+                                        <div className="flex-1 relative">
+                                            <input type="file" className="hidden" ref={fileInputRef} onChange={handleFileUpload} accept="audio/*" />
+                                            <button 
+                                                onClick={() => fileInputRef.current.click()}
+                                                className="w-full h-full p-6 bg-slate-50 border-2 border-dashed border-slate-200 rounded-2xl flex flex-col items-center gap-2 text-slate-600 hover:border-indigo-400 hover:text-indigo-600 transition-all"
+                                            >
+                                                <i className="fas fa-cloud-upload-alt text-2xl"></i>
+                                                <span className="font-bold text-sm uppercase">Voice Upload</span>
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {uploadedFileName && (
+                                        <div className="bg-indigo-600 text-white text-xs font-bold px-4 py-2 rounded-full inline-flex items-center gap-2">
+                                            <i className="fas fa-check-circle"></i> {uploadedFileName}
+                                        </div>
+                                    )}
+
+                                    {isAnalyzing && (
+                                        <div className="flex items-center gap-2 text-indigo-600 font-bold text-sm animate-pulse">
+                                            <i className="fas fa-magic"></i> AI aawaz analyze kar raha hai...
+                                        </div>
+                                    )}
+
+                                    <div className="space-y-4">
+                                        <div>
+                                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Detected Style</label>
+                                            <div className="mt-1 w-full p-4 bg-slate-100 rounded-xl text-slate-600 italic text-sm min-h-[52px]">
+                                                {styleInstruction || "Yahan aawaz ka style dikhega..."}
+                                            </div>
+                                        </div>
+
+                                        <div>
+                                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Dialogue</label>
+                                            <textarea 
+                                                value={text} onChange={(e) => setText(e.target.value)}
+                                                className="mt-1 w-full p-4 bg-white border border-slate-200 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none text-lg min-h-[120px]"
+                                                placeholder="AI se kya bulwana hai?"
+                                            />
+                                        </div>
+
+                                        <button 
+                                            onClick={generateVoice} disabled={isGenerating || !apiKey || !text}
+                                            className={`w-full py-5 rounded-2xl font-bold text-lg shadow-xl transition-all ${isGenerating ? 'bg-slate-300 text-slate-500 cursor-not-allowed' : 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-100'}`}
+                                        >
+                                            {isGenerating ? <><i className="fas fa-spinner fa-spin mr-2"></i> Generating...</> : 'Clone Voice Play Karein'}
+                                        </button>
+                                        
+                                        {error && <p className="text-red-500 text-xs font-bold text-center mt-2">{error}</p>}
+                                    </div>
+                                </div>
+
+                                {audioUrl && (
+                                    <div className="bg-white rounded-3xl p-6 shadow-2xl border-2 border-indigo-100 animate-in slide-in-from-bottom-5 duration-500">
+                                        <div className="flex flex-col md:flex-row items-center gap-4">
+                                            <div className="flex-1 w-full">
+                                                <p className="text-[10px] font-bold text-indigo-600 mb-2 uppercase">Taiyaar Voice:</p>
+                                                <audio controls src={audioUrl} className="w-full" autoPlay />
+                                            </div>
+                                            <a href={audioUrl} download="ai-clone.wav" className="bg-slate-900 text-white px-8 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-black transition-all">
+                                                <i className="fas fa-download"></i> Save
+                                            </a>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Sidebar: Voice Selector */}
+                            <div className="space-y-6">
+                                <div className="glass-morphism rounded-3xl p-6 shadow-xl h-fit">
+                                    <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
+                                        <i className="fas fa-users text-indigo-500"></i> Base Voice
+                                    </h3>
+                                    <div className="space-y-2 max-h-[500px] overflow-y-auto custom-scrollbar pr-2">
+                                        {DEFAULT_VOICES.map((v) => (
+                                            <button
+                                                key={v.id} onClick={() => setSelectedVoice(v.id)}
+                                                className={`w-full p-4 rounded-xl text-left border-2 transition-all ${selectedVoice === v.id ? 'bg-indigo-50 border-indigo-200' : 'bg-white border-transparent hover:bg-slate-50'}`}
+                                            >
+                                                <p className="font-bold text-sm text-slate-800">{v.name}</p>
+                                                <p className="text-[10px] text-slate-400 mt-1">{v.description}</p>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                                
+                                <div className="p-4 bg-green-50 border border-green-100 rounded-2xl">
+                                    <p className="text-[10px] text-green-800 leading-relaxed italic">
+                                        <i className="fas fa-shield-alt mr-1"></i> <strong>Privacy:</strong> Aapki API key aapke hi browser mein safe hai, kisi server par nahi jaati.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
